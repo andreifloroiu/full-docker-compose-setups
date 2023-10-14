@@ -1,0 +1,18 @@
+---
+filebeat.inputs:
+- type: log
+  enabled: true
+  paths:
+    - /logfiles/*.log
+setup.kibana:
+  host: "kibana:5601"
+  protocol: "https"
+  ssl.verification_mode: "none"
+  username: kibana_system
+  password: elastic
+output.elasticsearch:
+  hosts: ["elasticsearch:9200"]
+  protocol: "https"
+  ssl.verification_mode: "none"
+  username: filebeat_user
+  password: elastic

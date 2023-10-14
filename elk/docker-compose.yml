@@ -1,0 +1,86 @@
+---
+version: "3.7"
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${IMG_ELK_TAG}
+    volumes:
+      - ./certs:/usr/share/elasticsearch/config/certs
+    environment:
+      - "discovery.type=single-node"
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - "ELASTIC_PASSWORD=elastic"
+      - "xpack.security.enrollment.enabled=true"
+      - "xpack.security.enabled=true"
+      - "xpack.security.http.ssl.enabled=true"
+      - "xpack.security.http.ssl.key=/usr/share/elasticsearch/config/certs/elasticsearch.key"
+      - "xpack.security.http.ssl.certificate=/usr/share/elasticsearch/config/certs/elasticsearch.crt"
+    ports:
+      - "9200:9200"
+    networks:
+      - esnet
+  kibana-init:
+    image: appropriate/curl:${IMG_CURL_TAG}
+    depends_on:
+      - elasticsearch
+    command: >
+      /bin/sh -c "
+        echo -e $'Waiting for https://elasticsearch:9200...';
+        while ! curl -ks https://elasticsearch:9200 -u elastic:elastic; do sleep 1; done;
+        echo -e $'\\nSet password for kibana_system...';
+        curl -ks -XPOST https://elasticsearch:9200/_security/user/kibana_system/_password -u elastic:elastic -H 'Content-Type: application/json' -d '{
+          \"password\": \"elastic\"
+        }';
+        echo -e $'\\nSet password for beats_system...';
+        curl -ks -XPOST https://elasticsearch:9200/_security/user/beats_system/_password -u elastic:elastic -H 'Content-Type: application/json' -d '{
+          \"password\": \"elastic\"
+        }';
+        echo -e $'\\nCreate filebeat_role...';
+        curl -ks -XPOST https://elasticsearch:9200/_security/role/filebeat_role -u elastic:elastic -H 'Content-Type: application/json' -d '{
+          \"cluster\": [\"all\", \"read_ilm\", \"manage_ilm\", \"manage\", \"cluster:/admin/xpack/monitoring/bulk/ilm/get\"],
+          \"indices\": [
+            {
+              \"names\": [\"filebeat-*\", \"app-*\", \"application-*\"],
+              \"privileges\": [\"read\", \"write\", \"create_index\", \"manage\"]
+            }
+          ]
+        }';
+        echo -e '\\nCreate filebeat_user...';
+        curl -ks -XPOST https://elasticsearch:9200/_security/user/filebeat_user -u elastic:elastic -H 'Content-Type: application/json' -d '{
+          \"password\": \"elastic\",
+          \"roles\": [\"beats_system\", \"filebeat_role\"]
+        }';
+      "
+    networks:
+      - esnet
+  kibana:
+    image: docker.elastic.co/kibana/kibana:${IMG_ELK_TAG}
+    depends_on:
+      - kibana-init
+    volumes:
+      - ./certs:/usr/share/kibana/config/certs
+    environment:
+      - "ELASTICSEARCH_URL=https://elasticsearch:9200"
+      - "ELASTICSEARCH_SSL_VERIFICATIONMODE=none"
+      - "ELASTICSEARCH_USERNAME=kibana_system"
+      - "ELASTICSEARCH_PASSWORD=elastic"
+      - "SERVER_NAME=kibana.localhost"
+      - "ELASTICSEARCH_HOSTS=https://elasticsearch:9200"
+      - "SERVER_SSL_ENABLED=true"
+      - "SERVER_SSL_CERTIFICATE=/usr/share/kibana/config/certs/kibana.crt"
+      - "SERVER_SSL_KEY=/usr/share/kibana/config/certs/kibana.key"
+    ports:
+      - "5601:5601"
+    networks:
+      - esnet
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:${IMG_ELK_TAG}
+    depends_on:
+      - kibana
+    volumes:
+      - ./filebeat.yml:/usr/share/filebeat/filebeat.yml
+      - ${LOG_PATH}:/logfiles
+    networks:
+      - esnet
+networks:
+  esnet:
+    driver: bridge
